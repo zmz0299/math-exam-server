@@ -1,6 +1,7 @@
 const express = require('express');
 const crypto = require('crypto');
 const Anthropic = require('@anthropic-ai/sdk');
+const { analyzeRateLimiter } = require('../middleware/rateLimiter');
 const logger = require('../utils/logger');
 
 const router = express.Router();
@@ -156,8 +157,8 @@ async function runAnalysis(images, jobId) {
   }
 }
 
-// POST /api/analyze — start job, return immediately
-router.post('/', (req, res) => {
+// POST /api/analyze — start job, return immediately (rate limited)
+router.post('/', analyzeRateLimiter, (req, res) => {
   const { images } = req.body;
 
   if (!Array.isArray(images) || images.length === 0)

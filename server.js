@@ -35,8 +35,8 @@ app.set('trust proxy', 1);
 // --- Routes ---
 app.use('/api/health', healthRouter);
 
-// Auth + rate limit apply only to protected API routes
-app.use('/api', wechatAuth, analyzeRateLimiter);
+// Auth applies to all protected routes; rate limit only on POST (analysis submission)
+app.use('/api', wechatAuth);
 app.use('/api/analyze', analyzeRouter);
 
 // 404 catch-all
