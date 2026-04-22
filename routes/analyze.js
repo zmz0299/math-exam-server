@@ -8,40 +8,65 @@ const MAX_IMAGES = 3;
 const MAX_IMAGE_BYTES = 5 * 1024 * 1024; // 5 MB
 
 const SYSTEM_PROMPT =
-  '你是一位专业的高中数学出题结构分析专家，擅长分析高考及模拟题的考点分布。' +
-  '请分析用户上传的试卷图片，严格按照指定 JSON 格式返回分析结果，不要输出任何其他内容。';
+  '你是一名中国高考数学试卷诊断与提分分析助手，熟悉全国高考数学命题逻辑、试卷架构、常见设问方式、' +
+  '知识点分布规律和高三冲刺阶段的提分策略。你的任务是帮助学生查漏补缺、识别高频考法、理解命题意图、' +
+  '抓住最值得补的分数点。请始终围绕"有限时间内如何更高效提分"来分析试卷。' +
+  '严格按照指定 JSON 格式返回分析结果，不要输出任何其他内容。';
 
-const USER_INSTRUCTION = `请分析这份高中数学试卷，返回如下 JSON 格式（只输出 JSON，不含 markdown 代码块）：
+const USER_INSTRUCTION = `请对这份高中数学试卷进行深度诊断分析，从命题逻辑和提分策略角度输出，返回如下 JSON 格式（只输出 JSON，不含 markdown 代码块）：
 {
   "summary": {
     "totalQuestions": <题目总数>,
     "totalScore": <总分>,
-    "examType": "<试卷类型，如：高考模拟卷、月考卷等>"
+    "examType": "<试卷类型，如：高考全国卷模拟、月考卷、专项练习卷等>"
   },
   "questions": [
     {
       "id": <题号，整数>,
-      "type": "<题型：选择题/填空题/解答题>",
+      "type": "<选择题/填空题/解答题>",
       "score": <分值>,
-      "unit": "<所属单元，如：三角函数、数列、向量、概率统计等>",
-      "keyPoints": ["<核心考点1>", "<核心考点2>"],
-      "difficulty": "<难度：易/中/难>",
-      "hint": "<解题切入点，1-2句>",
-      "solution": "<详细解题方法，分步骤说明，如：第一步，...；第二步，...；最终得到...>"
+      "brief": "<题目核心内容一句话概括>",
+      "mainKnowledge": "<主要知识点，贴近高考体系，如：三角函数、导数应用、解析几何等>",
+      "subKnowledge": "<次要知识点，无则为空字符串>",
+      "module": "<基础分题/中档提分题/压轴拔高题>",
+      "difficulty": "<简单/中等/较难/困难>",
+      "intent": "<命题意图：出题人为什么这样出、想筛选什么水平的学生，1-2句>",
+      "coreAbility": "<核心考查能力，如：计算准确性/数形结合/分类讨论/转化与化归/阅读建模等>",
+      "entryPoint": "<解题切入点，1句，直接告诉学生从哪里突破>",
+      "solution": "<详细解题思路，分步说明，如：第一步...；第二步...；最终...>",
+      "commonMistakes": "<常见失分原因，1-2句，指出学生最容易犯的错误>",
+      "value": "<提分价值：低/中/高>",
+      "recommend": <是否建议重点复盘：true/false>
     }
   ],
   "structure": {
-    "type": "<卷型判断，如：综合能力型、函数专项卷等>",
+    "type": "<卷型判断，如：综合能力型/基础巩固型/压轴拔高型>",
     "reason": "<判断依据，1-2句>",
+    "basicCount": <基础分题数量>,
+    "mediumCount": <中档提分题数量>,
+    "hardCount": <压轴拔高题数量>,
     "unitDistribution": {
-      "<单元名>": <该单元分值占总分的百分比，整数，如30>
+      "<知识单元名>": <该单元题目占总题数百分比，整数>
     }
   },
+  "knowledgeStats": [
+    { "name": "<知识点>", "count": <出现题目数量> }
+  ],
+  "highFreqPoints": ["<高频核心考点1>", "<高频核心考点2>", "<高频核心考点3>"],
+  "examStyle": "<偏基础/综合能力/技巧性/压轴能力>",
+  "coreAbilities": ["<命题人看重的能力1>", "<命题人看重的能力2>", "<命题人看重的能力3>"],
+  "topReviews": [
+    {
+      "direction": "<查漏补缺方向名称>",
+      "reason": "<为何优先补这个，1句，聚焦提分效益>",
+      "questions": [<相关题号列表，整数数组>]
+    }
+  ],
   "weakPoints": [
     {
       "topic": "<薄弱考点名称>",
-      "priority": "<优先级：高/中/低>",
-      "suggestion": "<针对性备考建议，1-2句>"
+      "priority": "<高/中/低>",
+      "suggestion": "<针对性建议，1-2句>"
     }
   ]
 }`;
@@ -107,7 +132,7 @@ router.post('/', async (req, res) => {
   try {
     const message = await client.messages.create({
       model: 'claude-sonnet-4-20250514',
-      max_tokens: 4096,
+      max_tokens: 8000,
       system: SYSTEM_PROMPT,
       messages: [
         {
@@ -143,7 +168,7 @@ router.post('/', async (req, res) => {
     }
 
     // Basic structure check
-    if (!analysisData.summary || !Array.isArray(analysisData.questions) || !analysisData.structure) {
+    if (!analysisData.summary || !Array.isArray(analysisData.questions)) {
       logger.error('Claude response missing required fields', { analysisData });
       return res.status(502).json({
         success: false,
