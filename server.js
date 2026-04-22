@@ -8,6 +8,7 @@ const { wechatAuth } = require('./middleware/auth');
 const { analyzeRateLimiter } = require('./middleware/rateLimiter');
 const healthRouter = require('./routes/health');
 const analyzeRouter = require('./routes/analyze');
+const chatRouter = require('./routes/chat');
 
 // Ensure logs directory exists
 const logsDir = path.join(__dirname, 'logs');
@@ -38,6 +39,7 @@ app.use('/api/health', healthRouter);
 // Auth applies to all protected routes; rate limit only on POST (analysis submission)
 app.use('/api', wechatAuth);
 app.use('/api/analyze', analyzeRouter);
+app.use('/api/chat', chatRouter);
 
 // 404 catch-all
 app.use((_req, res) => {
