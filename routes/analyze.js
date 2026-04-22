@@ -87,10 +87,19 @@ const USER_INSTRUCTION = `请对这份高中数学试卷进行深度诊断分析
 }`;
 
 function detectMediaType(base64String) {
-  if (base64String.startsWith('data:image/png')) return 'image/png';
-  if (base64String.startsWith('data:image/gif')) return 'image/gif';
+  // Support data URI prefix
+  if (base64String.startsWith('data:image/png'))  return 'image/png';
+  if (base64String.startsWith('data:image/gif'))  return 'image/gif';
   if (base64String.startsWith('data:image/webp')) return 'image/webp';
-  return 'image/jpeg';
+  if (base64String.startsWith('data:image/jpeg') || base64String.startsWith('data:image/jpg')) return 'image/jpeg';
+
+  // Detect from raw base64 magic bytes
+  const raw = base64String.startsWith('data:') ? base64String.split(',')[1] : base64String;
+  const header = raw.slice(0, 12);
+  if (header.startsWith('iVBORw'))  return 'image/png';   // \x89PNG
+  if (header.startsWith('R0lGOD'))  return 'image/gif';   // GIF8
+  if (header.startsWith('UklGR'))   return 'image/webp';  // RIFF....WEBP
+  return 'image/jpeg'; // \xFF\xD8 → /9j/
 }
 
 function stripDataUri(base64String) {
