@@ -18,26 +18,32 @@ const USER_INSTRUCTION = `请分析这份高中数学试卷，返回如下 JSON 
     "totalScore": <总分>,
     "examType": "<试卷类型，如：高考模拟卷、月考卷等>"
   },
-  "knowledgePoints": [
-    {
-      "name": "<考点名称>",
-      "count": <题目数量>,
-      "score": <分值>,
-      "difficulty": "<难度：易/中/难>",
-      "questions": [<题号列表>]
-    }
-  ],
   "questions": [
     {
-      "number": <题号>,
+      "id": <题号，整数>,
       "type": "<题型：选择题/填空题/解答题>",
       "score": <分值>,
-      "knowledgePoint": "<主要考点>",
+      "unit": "<所属单元，如：三角函数、数列、向量、概率统计等>",
+      "keyPoints": ["<核心考点1>", "<核心考点2>"],
       "difficulty": "<难度：易/中/难>",
-      "hint": "<解题思路提示，1-2句>"
+      "hint": "<解题切入点，1-2句>",
+      "solution": "<详细解题方法，分步骤说明，如：第一步，...；第二步，...；最终得到...>"
     }
   ],
-  "suggestions": "<整体备考建议，2-3句>"
+  "structure": {
+    "type": "<卷型判断，如：综合能力型、函数专项卷等>",
+    "reason": "<判断依据，1-2句>",
+    "unitDistribution": {
+      "<单元名>": <该单元分值占总分的百分比，整数，如30>
+    }
+  },
+  "weakPoints": [
+    {
+      "topic": "<薄弱考点名称>",
+      "priority": "<优先级：高/中/低>",
+      "suggestion": "<针对性备考建议，1-2句>"
+    }
+  ]
 }`;
 
 // Detect image media type from base64 header or raw prefix
@@ -137,7 +143,7 @@ router.post('/', async (req, res) => {
     }
 
     // Basic structure check
-    if (!analysisData.summary || !Array.isArray(analysisData.questions)) {
+    if (!analysisData.summary || !Array.isArray(analysisData.questions) || !analysisData.structure) {
       logger.error('Claude response missing required fields', { analysisData });
       return res.status(502).json({
         success: false,
