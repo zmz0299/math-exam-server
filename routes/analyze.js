@@ -6,7 +6,7 @@ const logger = require('../utils/logger');
 
 const router = express.Router();
 
-const MAX_IMAGES = 3;
+const MAX_IMAGES = 4;
 const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
 
 // In-memory job store: jobId -> { status, data?, message? }
