@@ -1,11 +1,23 @@
 const express = require('express');
+const crypto = require('crypto');
 const Anthropic = require('@anthropic-ai/sdk');
 const logger = require('../utils/logger');
 
 const router = express.Router();
 
 const MAX_IMAGES = 3;
-const MAX_IMAGE_BYTES = 5 * 1024 * 1024; // 5 MB
+const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
+
+// In-memory job store: jobId -> { status, data?, message? }
+const jobs = new Map();
+
+// Clean up jobs older than 15 minutes to prevent memory leak
+setInterval(() => {
+  const cutoff = Date.now() - 15 * 60 * 1000;
+  for (const [id, job] of jobs.entries()) {
+    if (job.createdAt < cutoff) jobs.delete(id);
+  }
+}, 5 * 60 * 1000);
 
 const SYSTEM_PROMPT =
   '你是一名中国高考数学试卷诊断与提分分析助手，熟悉全国高考数学命题逻辑、试卷架构、常见设问方式、' +
@@ -73,133 +85,110 @@ const USER_INSTRUCTION = `请对这份高中数学试卷进行深度诊断分析
   ]
 }`;
 
-// Detect image media type from base64 header or raw prefix
 function detectMediaType(base64String) {
-  const raw = base64String.startsWith('data:') ? base64String : '';
-  if (raw.startsWith('data:image/png')) return 'image/png';
-  if (raw.startsWith('data:image/gif')) return 'image/gif';
-  if (raw.startsWith('data:image/webp')) return 'image/webp';
-  return 'image/jpeg'; // default
+  if (base64String.startsWith('data:image/png')) return 'image/png';
+  if (base64String.startsWith('data:image/gif')) return 'image/gif';
+  if (base64String.startsWith('data:image/webp')) return 'image/webp';
+  return 'image/jpeg';
 }
 
-// Strip the data URI prefix if present
 function stripDataUri(base64String) {
   const idx = base64String.indexOf(',');
   return idx !== -1 ? base64String.slice(idx + 1) : base64String;
 }
 
-// Rough byte size estimate from base64 length
 function estimateBytes(base64String) {
   const data = stripDataUri(base64String);
   return Math.ceil((data.length * 3) / 4);
 }
 
-router.post('/', async (req, res) => {
-  const { images } = req.body;
+// Run analysis in background — no HTTP response timeout risk
+async function runAnalysis(images, jobId) {
+  const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
-  // --- Validation ---
-  if (!Array.isArray(images) || images.length === 0) {
-    return res.status(400).json({ success: false, message: '请至少上传一张试卷图片' });
-  }
-  if (images.length > MAX_IMAGES) {
-    return res.status(400).json({ success: false, message: `最多上传 ${MAX_IMAGES} 张图片` });
-  }
-  for (let i = 0; i < images.length; i++) {
-    if (typeof images[i] !== 'string' || images[i].length === 0) {
-      return res.status(400).json({ success: false, message: `第 ${i + 1} 张图片数据无效` });
-    }
-    const bytes = estimateBytes(images[i]);
-    if (bytes > MAX_IMAGE_BYTES) {
-      return res.status(400).json({
-        success: false,
-        message: `第 ${i + 1} 张图片超过 5MB 限制（当前约 ${(bytes / 1024 / 1024).toFixed(1)}MB）`,
-      });
-    }
-  }
-
-  logger.info('Analyze request received', { ip: req.ip, imageCount: images.length });
-
-  // --- Build Anthropic message content ---
   const imageContent = images.map((img) => ({
     type: 'image',
-    source: {
-      type: 'base64',
-      media_type: detectMediaType(img),
-      data: stripDataUri(img),
-    },
+    source: { type: 'base64', media_type: detectMediaType(img), data: stripDataUri(img) },
   }));
-
-  const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
   try {
     const message = await client.messages.create({
       model: 'claude-sonnet-4-20250514',
-      max_tokens: 8000,
+      max_tokens: 16000,
       system: SYSTEM_PROMPT,
-      messages: [
-        {
-          role: 'user',
-          content: [
-            ...imageContent,
-            { type: 'text', text: USER_INSTRUCTION },
-          ],
-        },
-      ],
+      messages: [{ role: 'user', content: [...imageContent, { type: 'text', text: USER_INSTRUCTION }] }],
     });
 
-    const rawText = message.content
-      .filter((block) => block.type === 'text')
-      .map((block) => block.text)
-      .join('');
-
-    // Strip markdown code fences if Claude wrapped the JSON anyway
-    const jsonText = rawText
-      .replace(/^```(?:json)?\s*/i, '')
-      .replace(/\s*```$/i, '')
-      .trim();
+    const rawText = message.content.filter(b => b.type === 'text').map(b => b.text).join('');
+    const jsonText = rawText.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '').trim();
 
     let analysisData;
     try {
       analysisData = JSON.parse(jsonText);
     } catch {
-      logger.error('Claude returned non-JSON response', { rawText });
-      return res.status(502).json({
-        success: false,
-        message: '分析结果解析失败，请重试',
-      });
+      logger.error('Claude returned non-JSON', { jobId, rawText: rawText.slice(0, 200) });
+      jobs.set(jobId, { status: 'error', message: '分析结果解析失败，请重试', createdAt: jobs.get(jobId).createdAt });
+      return;
     }
 
-    // Basic structure check
     if (!analysisData.summary || !Array.isArray(analysisData.questions)) {
-      logger.error('Claude response missing required fields', { analysisData });
-      return res.status(502).json({
-        success: false,
-        message: '分析结果格式不完整，请重试',
-      });
+      jobs.set(jobId, { status: 'error', message: '分析结果格式不完整，请重试', createdAt: jobs.get(jobId).createdAt });
+      return;
     }
 
     logger.info('Analyze completed', {
-      ip: req.ip,
-      questionCount: analysisData.questions?.length,
+      jobId,
+      questionCount: analysisData.questions.length,
       inputTokens: message.usage?.input_tokens,
       outputTokens: message.usage?.output_tokens,
     });
 
-    return res.json({ success: true, data: analysisData });
+    jobs.set(jobId, { status: 'done', data: analysisData, createdAt: jobs.get(jobId).createdAt });
   } catch (err) {
+    let message = 'AI 服务调用失败';
     if (err instanceof Anthropic.APIError) {
-      logger.error('Anthropic API error', { status: err.status, message: err.message });
-      const userMsg =
-        err.status === 429
-          ? 'AI 服务繁忙，请稍后重试'
-          : err.status >= 500
-          ? 'AI 服务暂时不可用，请稍后重试'
-          : 'AI 服务调用失败';
-      return res.status(502).json({ success: false, message: userMsg });
+      message = err.status === 429 ? 'AI 服务繁忙，请稍后重试'
+        : err.status >= 500 ? 'AI 服务暂时不可用，请稍后重试'
+        : 'AI 服务调用失败';
     }
-    logger.error('Unexpected error in /api/analyze', { error: err.message, stack: err.stack });
-    return res.status(500).json({ success: false, message: '服务器内部错误，请稍后重试' });
+    logger.error('Analysis error', { jobId, error: err.message });
+    jobs.set(jobId, { status: 'error', message, createdAt: jobs.get(jobId).createdAt });
   }
+}
+
+// POST /api/analyze — start job, return immediately
+router.post('/', (req, res) => {
+  const { images } = req.body;
+
+  if (!Array.isArray(images) || images.length === 0)
+    return res.status(400).json({ success: false, message: '请至少上传一张试卷图片' });
+  if (images.length > MAX_IMAGES)
+    return res.status(400).json({ success: false, message: `最多上传 ${MAX_IMAGES} 张图片` });
+
+  for (let i = 0; i < images.length; i++) {
+    if (typeof images[i] !== 'string' || images[i].length === 0)
+      return res.status(400).json({ success: false, message: `第 ${i + 1} 张图片数据无效` });
+    const bytes = estimateBytes(images[i]);
+    if (bytes > MAX_IMAGE_BYTES)
+      return res.status(400).json({ success: false, message: `第 ${i + 1} 张图片超过 5MB` });
+  }
+
+  const jobId = crypto.randomUUID();
+  jobs.set(jobId, { status: 'processing', createdAt: Date.now() });
+
+  logger.info('Analyze job started', { jobId, ip: req.ip, imageCount: images.length });
+
+  // Fire and forget — no await
+  runAnalysis(images, jobId);
+
+  return res.json({ success: true, jobId });
+});
+
+// GET /api/analyze/result/:jobId — poll for result
+router.get('/result/:jobId', (req, res) => {
+  const job = jobs.get(req.params.jobId);
+  if (!job) return res.status(404).json({ success: false, message: '任务不存在或已过期' });
+  return res.json({ success: true, status: job.status, data: job.data, message: job.message });
 });
 
 module.exports = router;
