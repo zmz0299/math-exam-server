@@ -14,7 +14,7 @@ const SYSTEM_PROMPT =
   '严格按照指定 JSON 格式返回分析结果，不要输出任何其他内容。';
 
 const USER_INSTRUCTION = `请对这份高中数学试卷进行深度诊断分析，从命题逻辑和提分策略角度输出。
-注意：必须分析图片中的每一道题，一道都不能跳过。每个字段内容尽量详尽准确，不需要限制字数。
+注意：必须分析图片中每一道题，一道不能跳过。每个字段用精炼语言表达，去除废话，但保证准确性和教学价值。solution字段分步说明但每步一句话。
 返回如下 JSON 格式（只输出 JSON，不含 markdown 代码块）：
 {
   "summary": {
@@ -134,7 +134,7 @@ router.post('/', async (req, res) => {
   try {
     const message = await client.messages.create({
       model: 'claude-sonnet-4-20250514',
-      max_tokens: 16000,
+      max_tokens: 8000,
       system: SYSTEM_PROMPT,
       messages: [
         {
