@@ -13,7 +13,9 @@ const SYSTEM_PROMPT =
   '抓住最值得补的分数点。请始终围绕"有限时间内如何更高效提分"来分析试卷。' +
   '严格按照指定 JSON 格式返回分析结果，不要输出任何其他内容。';
 
-const USER_INSTRUCTION = `请对这份高中数学试卷进行深度诊断分析，从命题逻辑和提分策略角度输出，返回如下 JSON 格式（只输出 JSON，不含 markdown 代码块）：
+const USER_INSTRUCTION = `请对这份高中数学试卷进行深度诊断分析，从命题逻辑和提分策略角度输出。
+注意：每个文本字段控制在50字以内，solution字段不超过100字，整体输出尽量精炼。
+返回如下 JSON 格式（只输出 JSON，不含 markdown 代码块）：
 {
   "summary": {
     "totalQuestions": <题目总数>,
@@ -132,7 +134,7 @@ router.post('/', async (req, res) => {
   try {
     const message = await client.messages.create({
       model: 'claude-sonnet-4-20250514',
-      max_tokens: 8000,
+      max_tokens: 6000,
       system: SYSTEM_PROMPT,
       messages: [
         {
